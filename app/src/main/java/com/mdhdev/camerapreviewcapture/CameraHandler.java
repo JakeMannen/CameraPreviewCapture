@@ -6,8 +6,11 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
+import android.hardware.Camera;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -31,6 +34,7 @@ import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.Surface;
 import android.view.TextureView;
+import android.view.WindowManager;
 
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.ml.vision.FirebaseVision;
@@ -38,14 +42,21 @@ import com.google.firebase.ml.vision.common.FirebaseVisionImage;
 import com.google.firebase.ml.vision.common.FirebaseVisionImageMetadata;
 import com.google.firebase.ml.vision.text.FirebaseVisionText;
 import com.google.firebase.ml.vision.text.FirebaseVisionTextRecognizer;
+import com.mdhdev.camerapreviewcapture.mlkit.CameraImageGraphic;
+import com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay;
+import com.mdhdev.camerapreviewcapture.mlkit.TextGraphic;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 
+import static android.content.ContentValues.TAG;
 import static android.content.Context.CAMERA_SERVICE;
 
 public class CameraHandler {
@@ -59,6 +70,14 @@ public class CameraHandler {
     private CameraCaptureSession captureSession;
     private ImageReader imageReader;
     private int rotation;
+    private FirebaseVisionTextRecognizer textRecognizer;
+    private int texturewidth;
+    private int textureheight;
+    private String selectedcameraId;
+    private GraphicOverlay graphicOverlay;
+
+    final static int TEXT_CAPTURE_WIDTH = 480;
+    final static int TEXT_CAPTURE_HEIGHT = 360;
 
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
     static {
@@ -68,10 +87,11 @@ public class CameraHandler {
         ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
 
-    public CameraHandler(Context ctx, TextureView textureView) {
+    public CameraHandler(Context ctx, TextureView textureView, GraphicOverlay grapOv) {
 
         this.ctx = ctx;
         this.cameraView = textureView;
+        this.graphicOverlay = grapOv;
 
         cameraView.setSurfaceTextureListener(textureListener);
     }
@@ -120,20 +140,31 @@ public class CameraHandler {
         return result;
     }
 
+
     private TextureView.SurfaceTextureListener textureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-
+            texturewidth = width;
+            textureheight = height;
             openCamera();
+            transformImage(width,height);
+
         }
 
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
 
+            closeCamera();
+            texturewidth = width;
+            textureheight = height;
+
+            openCamera();
+            transformImage(width,height);
         }
 
         @Override
         public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+            closeCamera();
             return false;
         }
 
@@ -149,7 +180,7 @@ public class CameraHandler {
 
         try {
 
-            String selectedcameraId = null;
+            selectedcameraId = null;
 
             for (String cameraId : cameraManager.getCameraIdList()) {
 
@@ -162,6 +193,8 @@ public class CameraHandler {
                     //Get the resolutions from the selected camera that can be used in a TextureView
                     StreamConfigurationMap streamConfigurationMap = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
                     streamsize = streamConfigurationMap.getOutputSizes(SurfaceTexture.class)[0];
+
+                    //streamsize = chooseOptimalSize(available_sizes, texturewidth,textureheight,available_sizes[0].getWidth(),available_sizes[0].getHeight(),);
                     selectedcameraId = cameraId;
                 }
             }
@@ -176,7 +209,10 @@ public class CameraHandler {
                 // for ActivityCompat#requestPermissions for more details.
                 return;
             }
+
+
             rotation = getRotationCompensation(selectedcameraId,(Activity)ctx,ctx);
+
             cameraManager.openCamera(selectedcameraId, camerastateCallback, null);
 
         }catch (Exception e)
@@ -188,7 +224,11 @@ public class CameraHandler {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
             cameraDevice = camera;
-            startCamera();
+            try {
+                startCamera();
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
         }
 
         @Override
@@ -203,15 +243,47 @@ public class CameraHandler {
         }
     };
 
-    void  startCamera()
-    {
-        if(cameraDevice==null||!cameraView.isAvailable()|| streamsize==null)
+    private void transformImage(int width, int height) {
+        if(streamsize == null || cameraView == null) {
+            return;
+        }
+        Matrix matrix = new Matrix();
+
+        WindowManager windowManager = (WindowManager)ctx.getSystemService(Context.WINDOW_SERVICE);
+        int rotation = windowManager.getDefaultDisplay().getRotation();
+
+
+        RectF textureRectF = new RectF(0, 0, width, height);
+        RectF previewRectF = new RectF(0, 0, streamsize.getHeight(), streamsize.getWidth());
+        float centerX = textureRectF.centerX();
+        float centerY = textureRectF.centerY();
+
+        if(rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+            previewRectF.offset(centerX - previewRectF.centerX(),
+                    centerY - previewRectF.centerY());
+            matrix.setRectToRect(textureRectF, previewRectF, Matrix.ScaleToFit.FILL);
+            float scale = Math.max((float)width / streamsize.getWidth(),
+                    (float)height / streamsize.getHeight());
+            matrix.postScale(scale, scale, centerX, centerY);
+            matrix.postRotate(90 * (rotation - 2), centerX, centerY);
+        }
+        cameraView.setTransform(matrix);
+    }
+
+
+    private void  startCamera() throws CameraAccessException {
+
+        if(cameraDevice==null||!cameraView.isAvailable() || selectedcameraId == null)
         {
             return;
         }
 
+        //cameraView.setRotation(cameraManager
+        //        .getCameraCharacteristics(selectedcameraId)
+        //        .get(CameraCharacteristics.SENSOR_ORIENTATION));
+
         SurfaceTexture texture=cameraView.getSurfaceTexture();
-        imageReader = ImageReader.newInstance(480,360,ImageFormat.YUV_420_888,1);
+        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH,TEXT_CAPTURE_HEIGHT,ImageFormat.YUV_420_888,1);
 
 
 
@@ -225,7 +297,7 @@ public class CameraHandler {
         {
             return;
         }
-        texture.setDefaultBufferSize(streamsize.getWidth(), streamsize.getHeight());
+        texture.setDefaultBufferSize(texturewidth, textureheight);
         Surface surface=new Surface(texture);
         try
         {
@@ -269,11 +341,12 @@ public class CameraHandler {
         }
 
         captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
-
+        captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
         HandlerThread thread=new HandlerThread("changed Preview");
         thread.start();
         Handler handler=new Handler(thread.getLooper());
+
 
         try
         {
@@ -284,18 +357,9 @@ public class CameraHandler {
     ImageReader.OnImageAvailableListener ImageAvailable = new ImageReader.OnImageAvailableListener() {
         @Override
         public void onImageAvailable(ImageReader reader) {
+
+
             getStreamedImage(reader.acquireNextImage());
-
-        }
-    };
-
-    CameraCaptureSession.CaptureCallback captureCallback = new CameraCaptureSession.CaptureCallback() {
-        @Override
-        public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
-            super.onCaptureCompleted(session, request, result);
-
-           // getStreamedImage();
-
 
         }
     };
@@ -310,6 +374,21 @@ public class CameraHandler {
             cameraDevice.close();
             cameraDevice = null;
         }
+        if(imageReader!=null)
+        {
+            imageReader.close();
+            imageReader = null;
+        }
+        if(textRecognizer != null)
+        {
+            try {
+                textRecognizer.close();
+            } catch (IOException e) {
+
+                e.printStackTrace();
+            }
+            textRecognizer = null;
+        }
     }
 
     private void getStreamedImage(Image image){
@@ -319,47 +398,71 @@ public class CameraHandler {
 
         detectTextInImage(image);
         image.close();
-  /*
-        try {
-
-            ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-            byte[] bytes = new byte[buffer.capacity()];
-            buffer.get(bytes);
-            detectTextInImage(bytes);
-
-        } catch (Exception e) {
-            e.printStackTrace();
-
-        } finally {
-            if (image != null) {
-                image.close();
-            }
-        }
-*/
 
     }
 
+
     private void detectTextInImage(Image image){
 
-        FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromMediaImage(image,rotation);
+        if(textRecognizer != null) return;
+
+        final FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromMediaImage(image,rotation);
 
 
-        final FirebaseVisionTextRecognizer textRecognizer = FirebaseVision.getInstance().getOnDeviceTextRecognizer();
+        textRecognizer = FirebaseVision.getInstance().getOnDeviceTextRecognizer();
+
+
 
         textRecognizer.processImage(firebaseVisionImage).addOnSuccessListener(new OnSuccessListener<FirebaseVisionText>() {
             @Override
             public void onSuccess(FirebaseVisionText firebaseVisionText) {
 
-                Log.d("FIREBASE_TEXT_REC",firebaseVisionText.getText());
+                if(!firebaseVisionText.getTextBlocks().isEmpty()){
+
+                    //TODO HERE IS THE PLACE TO WORK WITH RECOGNIZED TEXT
+                    Log.d("FIREBASE_TEXT_REC",firebaseVisionText.getText());
+
+
+                    //Graphic mumbo jumbo
+                    if(graphicOverlay != null){
+                        //TODO Fix image source
+                        Bitmap originalCameraImage = cameraView.getBitmap();
+                        graphicOverlay.clear();
+                        if (originalCameraImage != null) {
+                            CameraImageGraphic imageGraphic = new CameraImageGraphic(graphicOverlay,
+                                    originalCameraImage);
+                            graphicOverlay.add(imageGraphic);
+                        }
+                        List<FirebaseVisionText.TextBlock> blocks = firebaseVisionText.getTextBlocks();
+                        for (int i = 0; i < blocks.size(); i++) {
+                            List<FirebaseVisionText.Line> lines = blocks.get(i).getLines();
+                            for (int j = 0; j < lines.size(); j++) {
+                                List<FirebaseVisionText.Element> elements = lines.get(j).getElements();
+                                for (int k = 0; k < elements.size(); k++) {
+                                    GraphicOverlay.Graphic textGraphic = new TextGraphic(graphicOverlay,
+                                            elements.get(k));
+                                    graphicOverlay.add(textGraphic);
+                                }
+                            }
+                        }
+                        graphicOverlay.postInvalidate();
+                    }
+
+
+                }
+
+                try {
+                    textRecognizer.close();
+                    textRecognizer = null;
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
 
             }
         });
 
-        try {
-            textRecognizer.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+
 
     }
+
 }

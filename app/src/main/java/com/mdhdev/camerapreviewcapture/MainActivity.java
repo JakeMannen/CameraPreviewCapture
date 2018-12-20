@@ -25,6 +25,8 @@ import android.view.ViewGroup;
 import android.widget.Switch;
 import android.widget.TextView;
 
+import com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay;
+
 public class MainActivity extends AppCompatActivity {
 
     /**
@@ -131,17 +133,23 @@ public class MainActivity extends AppCompatActivity {
                     ActivityCompat.requestPermissions(this.getActivity(),new String[]
                             {Manifest.permission.CAMERA,Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
 
-                    cameraHandler = new CameraHandler(this.getContext(),(TextureView) rootView.findViewById(R.id.cameraView));
+                    cameraHandler = new CameraHandler(this.getContext(),(TextureView) rootView.findViewById(R.id.cameraView), (GraphicOverlay) rootView.findViewById(R.id.graphOverlay));
 
                     return rootView;
 
                 case 2:
+
+
+
                     rootView = inflater.inflate(R.layout.fragment_recent, container, false);
                     TextView textView2 = (TextView) rootView.findViewById(R.id.section_label_recent);
                     textView2.setText(getString(R.string.section_format, getArguments().getInt(ARG_SECTION_NUMBER)));
                     return rootView;
 
                 case 3:
+
+
+
                     rootView = inflater.inflate(R.layout.fragment_recent, container, false);
                     TextView textView3 = (TextView) rootView.findViewById(R.id.section_label_recent);
                     textView3.setText(getString(R.string.section_format, getArguments().getInt(ARG_SECTION_NUMBER)));
@@ -161,6 +169,7 @@ public class MainActivity extends AppCompatActivity {
             cameraHandler.closeCamera();
 
         }
+
 
         public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
             switch (requestCode) {

@@ -13,4 +13,9 @@
         android:layout_height="wrap_content"
         tools:layout_editor_absoluteX="0dp"
         tools:layout_editor_absoluteY="0dp" />
+
+    <com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay
+        android:id="@+id/graphOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 </android.support.constraint.ConstraintLayout>
