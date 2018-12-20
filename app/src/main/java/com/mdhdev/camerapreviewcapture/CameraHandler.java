@@ -192,7 +192,9 @@ public class CameraHandler {
 
                     //Get the resolutions from the selected camera that can be used in a TextureView
                     StreamConfigurationMap streamConfigurationMap = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-                    streamsize = streamConfigurationMap.getOutputSizes(SurfaceTexture.class)[0];
+
+                    //TODO: Get the optimal size, not hardcoded
+                    streamsize = streamConfigurationMap.getOutputSizes(SurfaceTexture.class)[9];
 
                     //streamsize = chooseOptimalSize(available_sizes, texturewidth,textureheight,available_sizes[0].getWidth(),available_sizes[0].getHeight(),);
                     selectedcameraId = cameraId;
@@ -283,7 +285,7 @@ public class CameraHandler {
         //        .get(CameraCharacteristics.SENSOR_ORIENTATION));
 
         SurfaceTexture texture=cameraView.getSurfaceTexture();
-        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH,TEXT_CAPTURE_HEIGHT,ImageFormat.YUV_420_888,1);
+        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH,TEXT_CAPTURE_HEIGHT,ImageFormat.YUV_420_888,3);
 
 
 
@@ -358,9 +360,11 @@ public class CameraHandler {
         @Override
         public void onImageAvailable(ImageReader reader) {
 
+            Image image = reader.acquireNextImage();
 
-            getStreamedImage(reader.acquireNextImage());
-
+            detectTextInImage(image);
+            //getStreamedImage(image);
+            image.close();
         }
     };
 
@@ -397,14 +401,14 @@ public class CameraHandler {
 
 
         detectTextInImage(image);
-        image.close();
+
 
     }
 
 
     private void detectTextInImage(Image image){
 
-        if(textRecognizer != null) return;
+        if(textRecognizer != null || image == null) return;
 
         final FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromMediaImage(image,rotation);
 
@@ -423,7 +427,7 @@ public class CameraHandler {
                     Log.d("FIREBASE_TEXT_REC",firebaseVisionText.getText());
 
 
-                    //Graphic mumbo jumbo
+    /*                //Graphic mumbo jumbo
                     if(graphicOverlay != null){
                         //TODO Fix image source
                         Bitmap originalCameraImage = cameraView.getBitmap();
@@ -446,14 +450,18 @@ public class CameraHandler {
                             }
                         }
                         graphicOverlay.postInvalidate();
-                    }
+                    }*/
 
 
                 }
 
                 try {
-                    textRecognizer.close();
-                    textRecognizer = null;
+                    if(textRecognizer != null){
+
+                        textRecognizer.close();
+                        textRecognizer = null;
+                    }
+
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
