@@ -1,6 +1,7 @@
 package com.mdhdev.camerapreviewcapture;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.hardware.camera2.CameraManager;
 import android.support.design.widget.TabLayout;
@@ -46,6 +47,7 @@ public class MainActivity extends AppCompatActivity {
 
 
 
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -66,8 +68,23 @@ public class MainActivity extends AppCompatActivity {
         mViewPager.addOnPageChangeListener(new TabLayout.TabLayoutOnPageChangeListener(tabLayout));
         tabLayout.addOnTabSelectedListener(new TabLayout.ViewPagerOnTabSelectedListener(mViewPager));
 
+        ActivityCompat.requestPermissions(this,new String[]
+                {Manifest.permission.CAMERA,Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+
+
 
     }
+
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+
+
+
+    }
+
+
 
 
     @Override
@@ -102,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
          */
         private static final String ARG_SECTION_NUMBER = "section_number";
 
-        private CameraHandler cameraHandler;
+
 
         public PlaceholderFragment() {
         }
@@ -130,10 +147,8 @@ public class MainActivity extends AppCompatActivity {
                 case 1:
                     rootView = inflater.inflate(R.layout.fragment_main, container, false);
 
-                    ActivityCompat.requestPermissions(this.getActivity(),new String[]
-                            {Manifest.permission.CAMERA,Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+                    //cameraHandler = new CameraHandler(this,(TextureView) findViewById(R.id.cameraView), (GraphicOverlay) findViewById(R.id.graphOverlay));
 
-                    cameraHandler = new CameraHandler(this.getContext(),(TextureView) rootView.findViewById(R.id.cameraView), (GraphicOverlay) rootView.findViewById(R.id.graphOverlay));
 
                     return rootView;
 
@@ -149,7 +164,6 @@ public class MainActivity extends AppCompatActivity {
                 case 3:
 
 
-
                     rootView = inflater.inflate(R.layout.fragment_recent, container, false);
                     TextView textView3 = (TextView) rootView.findViewById(R.id.section_label_recent);
                     textView3.setText(getString(R.string.section_format, getArguments().getInt(ARG_SECTION_NUMBER)));
@@ -161,14 +175,6 @@ public class MainActivity extends AppCompatActivity {
 
         }
 
-        @Override
-        public void onPause() {
-            super.onPause();
-
-            if(null != cameraHandler)
-            cameraHandler.closeCamera();
-
-        }
 
 
         public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {

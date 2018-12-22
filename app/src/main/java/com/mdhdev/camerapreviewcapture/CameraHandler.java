@@ -9,8 +9,6 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
-import android.graphics.YuvImage;
-import android.hardware.Camera;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -18,9 +16,7 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.CameraProfile;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
@@ -36,6 +32,7 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.WindowManager;
 
+
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.firebase.ml.vision.FirebaseVision;
 import com.google.firebase.ml.vision.common.FirebaseVisionImage;
@@ -46,17 +43,14 @@ import com.mdhdev.camerapreviewcapture.mlkit.CameraImageGraphic;
 import com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay;
 import com.mdhdev.camerapreviewcapture.mlkit.TextGraphic;
 
-import java.io.FileNotFoundException;
+
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 
-import static android.content.ContentValues.TAG;
 import static android.content.Context.CAMERA_SERVICE;
 
 public class CameraHandler {
@@ -70,16 +64,28 @@ public class CameraHandler {
     private CameraCaptureSession captureSession;
     private ImageReader imageReader;
     private int rotation;
-    private FirebaseVisionTextRecognizer textRecognizer;
     private int texturewidth;
     private int textureheight;
     private String selectedcameraId;
     private GraphicOverlay graphicOverlay;
 
-    final static int TEXT_CAPTURE_WIDTH = 480;
-    final static int TEXT_CAPTURE_HEIGHT = 360;
+    private Handler cameraHandler;
+    private Handler imagereaderHandler;
+    private Handler captureHandler;
+    private HandlerThread cameraHandlerThread;
+    private HandlerThread imageReaderThread;
+    private HandlerThread captureHandlerThread;
+    private Thread textThread;
+    private TextRecognitionEngine textEngine;
+
+    //Size is enough for text capture
+    private final static int TEXT_CAPTURE_WIDTH = 480;
+    private final static int TEXT_CAPTURE_HEIGHT = 360;
+    private final static int FRAME_DETECT_THRESHOLD = 5;
+
 
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
         ORIENTATIONS.append(Surface.ROTATION_90, 0);
@@ -92,8 +98,9 @@ public class CameraHandler {
         this.ctx = ctx;
         this.cameraView = textureView;
         this.graphicOverlay = grapOv;
-
+        startTextRecognitionThread();
         cameraView.setSurfaceTextureListener(textureListener);
+
     }
 
     /**
@@ -113,6 +120,9 @@ public class CameraHandler {
         // devices it is 270 degrees. For devices with a sensor orientation of
         // 270, rotate the image an additional 180 ((270 + 270) % 360) degrees.
         CameraManager cameraManager = (CameraManager) context.getSystemService(CAMERA_SERVICE);
+
+        if(cameraManager == null) return 0;
+
         int sensorOrientation = cameraManager
                 .getCameraCharacteristics(cameraId)
                 .get(CameraCharacteristics.SENSOR_ORIENTATION);
@@ -147,19 +157,18 @@ public class CameraHandler {
             texturewidth = width;
             textureheight = height;
             openCamera();
-            transformImage(width,height);
+            transformImage(width, height);
 
         }
 
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
 
-            closeCamera();
             texturewidth = width;
             textureheight = height;
 
             openCamera();
-            transformImage(width,height);
+            transformImage(width, height);
         }
 
         @Override
@@ -174,7 +183,12 @@ public class CameraHandler {
         }
     };
 
-    public void openCamera() {
+    private void openCamera() {
+
+        if (!cameraView.isAvailable()) {
+            cameraView.setSurfaceTextureListener(textureListener);
+            return;
+        }
 
         cameraManager = (CameraManager) ctx.getSystemService(CAMERA_SERVICE);
 
@@ -193,10 +207,7 @@ public class CameraHandler {
                     //Get the resolutions from the selected camera that can be used in a TextureView
                     StreamConfigurationMap streamConfigurationMap = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
-                    //TODO: Get the optimal size, not hardcoded
-                    streamsize = streamConfigurationMap.getOutputSizes(SurfaceTexture.class)[9];
-
-                    //streamsize = chooseOptimalSize(available_sizes, texturewidth,textureheight,available_sizes[0].getWidth(),available_sizes[0].getHeight(),);
+                    streamsize = chooseOptimalPreviewSize(streamConfigurationMap.getOutputSizes(SurfaceTexture.class), texturewidth, textureheight);
                     selectedcameraId = cameraId;
                 }
             }
@@ -213,45 +224,95 @@ public class CameraHandler {
             }
 
 
-            rotation = getRotationCompensation(selectedcameraId,(Activity)ctx,ctx);
+            rotation = getRotationCompensation(selectedcameraId, (Activity) ctx, ctx);
 
-            cameraManager.openCamera(selectedcameraId, camerastateCallback, null);
+            cameraHandlerThread = new HandlerThread("Camera thread");
+            cameraHandlerThread.start();
+            cameraHandler = new Handler(cameraHandlerThread.getLooper());
 
-        }catch (Exception e)
-        {
+            cameraManager.openCamera(selectedcameraId, camerastateCallback, cameraHandler);
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
+    }
+
+    //This selects the closest matching image size the camera outputs to the surface
+    private Size chooseOptimalPreviewSize(Size[] sizes_available, int width, int height) {
+
+        ArrayList<Size> sizelist = new ArrayList<>();
+
+        for (Size size : sizes_available) {
+
+            //Landscape mode
+            if (width > height) {
+
+                //If the size is bigger than our preview window
+                if (size.getWidth() > width && size.getHeight() > height) {
+
+                    sizelist.add(size);
+                }
+            }
+            //Portrait mode
+            else {
+
+                if (size.getWidth() > height && size.getHeight() > width) {
+
+                    sizelist.add(size);
+                }
+            }
+        }
+
+        //Select the closest match
+        if (sizelist.size() > 0) {
+
+            //Compare resolutions in list to find the closest
+            Size optimal_size = Collections.min(sizelist, new Comparator<Size>() {
+
+                @Override
+                public int compare(Size o1, Size o2) {
+
+                    return Long.signum((o1.getWidth() * o1.getHeight()) - (o2.getWidth() * o2.getHeight()));
+                }
+            });
+
+            return optimal_size;
+        }
+
+        //If no optimal found, return the biggest
+        return sizes_available[0];
     }
 
     private CameraDevice.StateCallback camerastateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice camera) {
             cameraDevice = camera;
-            try {
-                startCamera();
-            } catch (CameraAccessException e) {
-                e.printStackTrace();
-            }
+
+                startCameraCapture();
+
         }
 
         @Override
         public void onDisconnected(@NonNull CameraDevice camera) {
-            cameraDevice.close();
+            camera.close();
+            cameraDevice = null;
         }
 
         @Override
         public void onError(@NonNull CameraDevice camera, int error) {
-            cameraDevice.close();
+            camera.close();
             cameraDevice = null;
         }
     };
 
+    //Transforms the preview when rotating
     private void transformImage(int width, int height) {
-        if(streamsize == null || cameraView == null) {
+        if (streamsize == null || cameraView == null) {
             return;
         }
         Matrix matrix = new Matrix();
 
-        WindowManager windowManager = (WindowManager)ctx.getSystemService(Context.WINDOW_SERVICE);
+        WindowManager windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
         int rotation = windowManager.getDefaultDisplay().getRotation();
 
 
@@ -260,12 +321,12 @@ public class CameraHandler {
         float centerX = textureRectF.centerX();
         float centerY = textureRectF.centerY();
 
-        if(rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
             previewRectF.offset(centerX - previewRectF.centerX(),
                     centerY - previewRectF.centerY());
             matrix.setRectToRect(textureRectF, previewRectF, Matrix.ScaleToFit.FILL);
-            float scale = Math.max((float)width / streamsize.getWidth(),
-                    (float)height / streamsize.getHeight());
+            float scale = Math.max((float) width / streamsize.getWidth(),
+                    (float) height / streamsize.getHeight());
             matrix.postScale(scale, scale, centerX, centerY);
             matrix.postRotate(90 * (rotation - 2), centerX, centerY);
         }
@@ -273,202 +334,288 @@ public class CameraHandler {
     }
 
 
-    private void  startCamera() throws CameraAccessException {
+    private void startCameraCapture() {
 
-        if(cameraDevice==null||!cameraView.isAvailable() || selectedcameraId == null)
-        {
+        if (cameraDevice == null || !cameraView.isAvailable() || selectedcameraId == null) {
             return;
         }
 
-        //cameraView.setRotation(cameraManager
-        //        .getCameraCharacteristics(selectedcameraId)
-        //        .get(CameraCharacteristics.SENSOR_ORIENTATION));
-
-        SurfaceTexture texture=cameraView.getSurfaceTexture();
-        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH,TEXT_CAPTURE_HEIGHT,ImageFormat.YUV_420_888,3);
-
-
-
-        HandlerThread thread=new HandlerThread("image accuired");
-        thread.start();
-        Handler handler=new Handler(thread.getLooper());
-
-        imageReader.setOnImageAvailableListener(ImageAvailable,handler);
-
-        if(texture==null)
-        {
+        //Texture for preview window
+        SurfaceTexture texture = cameraView.getSurfaceTexture();
+        if (texture == null) {
             return;
         }
         texture.setDefaultBufferSize(texturewidth, textureheight);
-        Surface surface=new Surface(texture);
-        try
-        {
-            captureBuilder=cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+        Surface surface = new Surface(texture);
 
-        }catch (Exception e)
-        {
+        //Imagereader for images used for textrecognition
+        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH, TEXT_CAPTURE_HEIGHT, ImageFormat.YUV_420_888, 1);
+
+        //Thread for Imagereader
+        imageReaderThread = new HandlerThread("Image acquire");
+        imageReaderThread.start();
+        imagereaderHandler = new Handler(imageReaderThread.getLooper());
+
+        imageReader.setOnImageAvailableListener(ImageAvailable, imagereaderHandler);
+
+        try {
+            captureBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+
+        } catch (Exception e) {
+            e.printStackTrace();
         }
 
+        //Setup the capture session
         List<Surface> outputSurfaces = new LinkedList<>();
-        outputSurfaces.add(imageReader.getSurface());
+
         outputSurfaces.add(surface);
+        outputSurfaces.add(imageReader.getSurface());
 
-        captureBuilder.addTarget(imageReader.getSurface());
         captureBuilder.addTarget(surface);
+        captureBuilder.addTarget(imageReader.getSurface());
 
-
-        try
-        {
-            cameraDevice.createCaptureSession(outputSurfaces, new CameraCaptureSession.StateCallback() { //Arrays.asList(surface)
+        try {
+            cameraDevice.createCaptureSession(outputSurfaces, new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(CameraCaptureSession session) {
-                    captureSession=session;
-                    getChangedPreview();
+                    captureSession = session;
+                    getUpdatedPreview();
                 }
+
                 @Override
                 public void onConfigureFailed(CameraCaptureSession session) {
                 }
-            },null);
+            }, null);
 
-        }catch (Exception e)
-        {
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
-    private void getChangedPreview()
-    {
-        if(cameraDevice==null)
-        {
+    private void getUpdatedPreview() {
+        if (cameraDevice == null) {
             return;
         }
 
         captureBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
         captureBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
-        HandlerThread thread=new HandlerThread("changed Preview");
-        thread.start();
-        Handler handler=new Handler(thread.getLooper());
+
+        captureHandlerThread = new HandlerThread("Changed Preview");
+        captureHandlerThread.start();
+        captureHandler = new Handler(captureHandlerThread.getLooper());
 
 
-        try
-        {
-            captureSession.setRepeatingRequest(captureBuilder.build(), null, handler);
-        }catch (Exception e){}
+        try {
+            captureSession.setRepeatingRequest(captureBuilder.build(), null, captureHandler);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
+
 
     ImageReader.OnImageAvailableListener ImageAvailable = new ImageReader.OnImageAvailableListener() {
         @Override
-        public void onImageAvailable(ImageReader reader) {
+        public void onImageAvailable(final ImageReader reader) {
 
-            Image image = reader.acquireNextImage();
+            //Send the image frame to separate thread for text processing
+            textEngine.addImageForProcessing(reader.acquireNextImage(), rotation);
 
-            detectTextInImage(image);
-            //getStreamedImage(image);
-            image.close();
         }
     };
 
+    private void startTextRecognitionThread(){
+
+        textEngine = new TextRecognitionEngine(FRAME_DETECT_THRESHOLD);
+        textThread = new Thread(textEngine);
+        textThread.start();
+    }
+
+    private void closeThreads() {
 
 
+        if (cameraHandlerThread != null) {
 
-    public void closeCamera(){
+            cameraHandlerThread.quitSafely();
 
-        if(cameraDevice!=null)
-        {
+            try {
+                cameraHandlerThread.join();
+                cameraHandlerThread = null;
+                cameraHandler = null;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        }
+
+        if (captureHandlerThread != null) {
+
+            captureHandlerThread.quitSafely();
+
+            try {
+                captureHandlerThread.join();
+                captureHandlerThread = null;
+                captureHandler = null;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        }
+        if (imageReaderThread != null) {
+
+            imageReaderThread.quitSafely();
+
+            try {
+                imageReaderThread.join();
+                imageReaderThread = null;
+                imagereaderHandler = null;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        if(textThread != null){
+
+            textEngine.stop();
+            try {
+                textThread.join();
+                textThread = null;
+                textEngine = null;
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+
+    }
+
+    public void closeCamera() {
+
+        if (cameraDevice != null) {
             cameraDevice.close();
             cameraDevice = null;
         }
-        if(imageReader!=null)
-        {
+        if (imageReader != null) {
             imageReader.close();
             imageReader = null;
         }
-        if(textRecognizer != null)
-        {
-            try {
-                textRecognizer.close();
-            } catch (IOException e) {
 
+        closeThreads();
+    }
+
+
+
+    private static class TextRecognitionEngine implements Runnable {
+
+        private Boolean isRunning = true;
+        private Boolean isProcessing = false;
+
+        private FirebaseVisionTextRecognizer textRecognizer;
+
+        private FirebaseVisionImage firebaseVisionImage;
+        private int rotation;
+        private Image image;
+        private int frameThreshold;
+        private int frameCount = 0;
+
+
+        private TextRecognitionEngine(int frameThreshold) {
+
+            this.frameThreshold = frameThreshold;
+
+            textRecognizer = FirebaseVision.getInstance().getOnDeviceTextRecognizer();
+        }
+
+        public synchronized void addImageForProcessing(Image imagein, int rotationin) {
+
+            if (!readyForProcessing() || isProcessing || !isRunning || textRecognizer == null) {
+
+                frameCount++;
+                imagein.close();
+                return;
+            }
+
+            this.image = imagein;
+            this.rotation = rotationin;
+
+            if (firebaseVisionImage != null) return;
+
+            firebaseVisionImage = FirebaseVisionImage.fromMediaImage(image, rotation);
+
+            image.close();
+
+            isProcessing = true;
+
+            frameCount = 0;
+        }
+
+        //If threshold is met a new frame can be processed
+        private boolean readyForProcessing() {
+
+            if(frameCount >= frameThreshold){
+
+                frameCount = 0;
+                return true;
+            }
+            else{
+                return false;
+            }
+        }
+
+
+        public void stop(){
+            isRunning = false;
+        }
+
+        public synchronized Boolean isProcessing() {
+            return isProcessing;
+        }
+
+        public synchronized Boolean isRunning() {
+            return isRunning;
+        }
+
+        @Override
+        public void run() {
+
+
+            while(isRunning) {
+
+                if (isProcessing) {
+
+                    textRecognizer.processImage(firebaseVisionImage).addOnSuccessListener(new OnSuccessListener<FirebaseVisionText>() {
+                        @Override
+                        public void onSuccess(final FirebaseVisionText firebaseVisionText) {
+
+                            if (!firebaseVisionText.getTextBlocks().isEmpty()) {
+
+                                //TODO HERE IS THE PLACE TO WORK WITH RECOGNIZED TEXT
+                                Log.d("FIREBASE_TEXT_REC", firebaseVisionText.getText());
+
+
+                            }
+
+                        }
+                    });
+
+                    firebaseVisionImage = null;
+                    isProcessing = false;
+                }
+
+            }
+
+            //Close the TextRecognizer
+            try {
+                if (textRecognizer != null) {
+
+                    textRecognizer.close();
+                    textRecognizer = null;
+                }
+
+            } catch (IOException e) {
                 e.printStackTrace();
             }
-            textRecognizer = null;
         }
-    }
-
-    private void getStreamedImage(Image image){
-
-        if(null == image) return;
-
-
-        detectTextInImage(image);
-
-
-    }
-
-
-    private void detectTextInImage(Image image){
-
-        if(textRecognizer != null || image == null) return;
-
-        final FirebaseVisionImage firebaseVisionImage = FirebaseVisionImage.fromMediaImage(image,rotation);
-
-
-        textRecognizer = FirebaseVision.getInstance().getOnDeviceTextRecognizer();
-
-
-
-        textRecognizer.processImage(firebaseVisionImage).addOnSuccessListener(new OnSuccessListener<FirebaseVisionText>() {
-            @Override
-            public void onSuccess(FirebaseVisionText firebaseVisionText) {
-
-                if(!firebaseVisionText.getTextBlocks().isEmpty()){
-
-                    //TODO HERE IS THE PLACE TO WORK WITH RECOGNIZED TEXT
-                    Log.d("FIREBASE_TEXT_REC",firebaseVisionText.getText());
-
-
-    /*                //Graphic mumbo jumbo
-                    if(graphicOverlay != null){
-                        //TODO Fix image source
-                        Bitmap originalCameraImage = cameraView.getBitmap();
-                        graphicOverlay.clear();
-                        if (originalCameraImage != null) {
-                            CameraImageGraphic imageGraphic = new CameraImageGraphic(graphicOverlay,
-                                    originalCameraImage);
-                            graphicOverlay.add(imageGraphic);
-                        }
-                        List<FirebaseVisionText.TextBlock> blocks = firebaseVisionText.getTextBlocks();
-                        for (int i = 0; i < blocks.size(); i++) {
-                            List<FirebaseVisionText.Line> lines = blocks.get(i).getLines();
-                            for (int j = 0; j < lines.size(); j++) {
-                                List<FirebaseVisionText.Element> elements = lines.get(j).getElements();
-                                for (int k = 0; k < elements.size(); k++) {
-                                    GraphicOverlay.Graphic textGraphic = new TextGraphic(graphicOverlay,
-                                            elements.get(k));
-                                    graphicOverlay.add(textGraphic);
-                                }
-                            }
-                        }
-                        graphicOverlay.postInvalidate();
-                    }*/
-
-
-                }
-
-                try {
-                    if(textRecognizer != null){
-
-                        textRecognizer.close();
-                        textRecognizer = null;
-                    }
-
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-
-            }
-        });
-
 
 
     }
