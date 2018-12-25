@@ -365,7 +365,25 @@ public class CameraHandler {
 
             @Override
             public void handleMessage(Message msg) {
-                infoText.setText(msg.getData().getString("rec_text"));
+
+                switch(msg.what){
+
+                    //Update text
+                    case 1:
+                        infoText.setText(msg.getData().getString("rec_text"));
+
+                        break;
+
+                    //Stop camera feed
+                    case 2:
+
+                        cameraDevice.close();
+                        break;
+                        default:
+                            break;
+                }
+
+
             }
         };
         //Thread for Imagereader
@@ -629,8 +647,10 @@ public class CameraHandler {
                                 Message msg = Message.obtain();
                                 msg.what = 1;
                                 msg.setData(message_data);
-
                                 uiHandler.sendMessage(msg);
+
+                                //Run line below to stop camera feed
+                                //uiHandler.sendEmptyMessage(2);
                             }
 
                         }
