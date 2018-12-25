@@ -20,8 +20,11 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
+import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.annotation.RequiresApi;
 import android.support.v4.app.ActivityCompat;
@@ -31,6 +34,7 @@ import android.util.SparseIntArray;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.WindowManager;
+import android.widget.TextView;
 
 
 import com.google.android.gms.tasks.OnSuccessListener;
@@ -67,7 +71,7 @@ public class CameraHandler {
     private int texturewidth;
     private int textureheight;
     private String selectedcameraId;
-    private GraphicOverlay graphicOverlay;
+    private TextView infoText;
 
     private Handler cameraHandler;
     private Handler imagereaderHandler;
@@ -75,14 +79,18 @@ public class CameraHandler {
     private HandlerThread cameraHandlerThread;
     private HandlerThread imageReaderThread;
     private HandlerThread captureHandlerThread;
-    private Thread textThread;
     private TextRecognitionEngine textEngine;
+
+    Handler uiHandler;
+
+    private Handler recHandler;
+    private HandlerThread recHandlerThread;
 
     //Size is enough for text capture
     private final static int TEXT_CAPTURE_WIDTH = 480;
     private final static int TEXT_CAPTURE_HEIGHT = 360;
-    private final static int FRAME_DETECT_THRESHOLD = 5;
-
+    private final static int FRAME_DETECT_THRESHOLD = 3;
+    private int frameCount = 0;
 
     private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
 
@@ -93,13 +101,16 @@ public class CameraHandler {
         ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
 
-    public CameraHandler(Context ctx, TextureView textureView, GraphicOverlay grapOv) {
+    public CameraHandler(Context ctx, TextureView textureView, TextView textInfo) {
 
         this.ctx = ctx;
         this.cameraView = textureView;
-        this.graphicOverlay = grapOv;
-        startTextRecognitionThread();
+        this.infoText = textInfo;
+
+
         cameraView.setSurfaceTextureListener(textureListener);
+
+
 
     }
 
@@ -349,12 +360,24 @@ public class CameraHandler {
         Surface surface = new Surface(texture);
 
         //Imagereader for images used for textrecognition
-        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH, TEXT_CAPTURE_HEIGHT, ImageFormat.YUV_420_888, 1);
+        imageReader = ImageReader.newInstance(TEXT_CAPTURE_WIDTH, TEXT_CAPTURE_HEIGHT, ImageFormat.JPEG, 1);
+        uiHandler = new Handler(Looper.getMainLooper()){
 
+            @Override
+            public void handleMessage(Message msg) {
+                infoText.setText(msg.getData().getString("rec_text"));
+            }
+        };
         //Thread for Imagereader
         imageReaderThread = new HandlerThread("Image acquire");
         imageReaderThread.start();
         imagereaderHandler = new Handler(imageReaderThread.getLooper());
+
+        recHandlerThread = new HandlerThread("Rec Text");
+        recHandlerThread.start();
+        recHandler = new Handler(recHandlerThread.getLooper());
+        textEngine = new TextRecognitionEngine(FRAME_DETECT_THRESHOLD,uiHandler);
+        recHandler.post(textEngine);
 
         imageReader.setOnImageAvailableListener(ImageAvailable, imagereaderHandler);
 
@@ -424,13 +447,6 @@ public class CameraHandler {
         }
     };
 
-    private void startTextRecognitionThread(){
-
-        textEngine = new TextRecognitionEngine(FRAME_DETECT_THRESHOLD);
-        textThread = new Thread(textEngine);
-        textThread.start();
-    }
-
     private void closeThreads() {
 
 
@@ -474,9 +490,24 @@ public class CameraHandler {
             }
         }
 
-        if(textThread != null){
+        if(recHandlerThread != null){
 
             textEngine.stop();
+            recHandlerThread.quitSafely();
+            try {
+                recHandlerThread.join();
+                recHandlerThread = null;
+                recHandler = null;
+                textEngine = null;
+            }catch (InterruptedException e){
+                e.printStackTrace();
+            }
+
+        }
+/*        if(textThread != null){
+
+            textEngine.stop();
+
             try {
                 textThread.join();
                 textThread = null;
@@ -484,7 +515,7 @@ public class CameraHandler {
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-        }
+        }*/
 
 
     }
@@ -517,12 +548,13 @@ public class CameraHandler {
         private Image image;
         private int frameThreshold;
         private int frameCount = 0;
+        private Handler uiHandler;
 
 
-        private TextRecognitionEngine(int frameThreshold) {
+        private TextRecognitionEngine(int frameThreshold, Handler uihandler) {
 
             this.frameThreshold = frameThreshold;
-
+            this.uiHandler = uihandler;
             textRecognizer = FirebaseVision.getInstance().getOnDeviceTextRecognizer();
         }
 
@@ -592,7 +624,13 @@ public class CameraHandler {
                                 //TODO HERE IS THE PLACE TO WORK WITH RECOGNIZED TEXT
                                 Log.d("FIREBASE_TEXT_REC", firebaseVisionText.getText());
 
+                                Bundle message_data = new Bundle();
+                                message_data.putString("rec_text",firebaseVisionText.getText());
+                                Message msg = Message.obtain();
+                                msg.what = 1;
+                                msg.setData(message_data);
 
+                                uiHandler.sendMessage(msg);
                             }
 
                         }

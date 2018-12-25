@@ -6,6 +6,8 @@ import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.TextureView;
+import android.view.WindowManager;
+import android.widget.TextView;
 
 import com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay;
 
@@ -28,9 +30,11 @@ public class CameraActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
 
+        cameraHandler = new CameraHandler(this, (TextureView) findViewById(R.id.previeWindow),(TextView)findViewById(R.id.recorded_text));
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if(cameraHandler == null){
 
-            cameraHandler = new CameraHandler(this, (TextureView) findViewById(R.id.previeWindow), (GraphicOverlay) findViewById(R.id.graphicCover));
+
         }
 
 
@@ -40,6 +44,7 @@ public class CameraActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
 
+        if(cameraHandler != null) cameraHandler.closeCamera();
 
     }
 
