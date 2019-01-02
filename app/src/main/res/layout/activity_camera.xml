@@ -13,11 +13,6 @@
         tools:layout_editor_absoluteX="0dp"
         tools:layout_editor_absoluteY="0dp" />
 
-    <com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay
-        android:id="@+id/graphicCover"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
     <TextView
         android:id="@+id/recorded_text"
         android:layout_width="wrap_content"
@@ -27,5 +22,15 @@
         android:text="[ Analyzing... ]"
         android:textColor="@color/colorAccent"
         android:textSize="22dp"
-        android:textStyle="bold" />
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <ImageButton
+        android:id="@+id/snapshotBtn"
+        android:layout_width="82dp"
+        android:layout_height="82dp"
+        android:layout_alignParentBottom="true"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="0dp"
+        app:srcCompat="@android:drawable/ic_menu_camera" />
 </android.widget.RelativeLayout>

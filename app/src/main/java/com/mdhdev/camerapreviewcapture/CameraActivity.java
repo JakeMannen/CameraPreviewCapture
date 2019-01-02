@@ -5,15 +5,31 @@ import android.content.pm.PackageManager;
 import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.TextureView;
 import android.view.WindowManager;
+import android.widget.ImageButton;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import com.google.firebase.ml.vision.text.FirebaseVisionText;
 import com.mdhdev.camerapreviewcapture.mlkit.GraphicOverlay;
 
 public class CameraActivity extends AppCompatActivity {
 
     private CameraHandler cameraHandler;
+
+
+    CameraHandler.OnTextRecognizedListener onTextRecognizedListener = new CameraHandler.OnTextRecognizedListener() {
+        @Override
+        public void onTextRecognized(FirebaseVisionText text) {
+
+            //TODO Work with Firebasetext object here?
+            Toast t = Toast.makeText(getApplicationContext(),text.getText(), Toast.LENGTH_LONG);
+            t.setGravity(Gravity.TOP,0,0);
+            t.show();
+        }
+    };
 
 
     @Override
@@ -30,13 +46,10 @@ public class CameraActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
 
-        cameraHandler = new CameraHandler(this, (TextureView) findViewById(R.id.previeWindow),(TextView)findViewById(R.id.recorded_text));
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if(cameraHandler == null){
 
+            cameraHandler = new CameraHandler(this, (TextureView) findViewById(R.id.previeWindow),(ImageButton)findViewById(R.id.snapshotBtn));
 
-        }
-
+            cameraHandler.setOnTextRecognizedListener(onTextRecognizedListener);
 
     }
 
@@ -44,7 +57,10 @@ public class CameraActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
 
-        if(cameraHandler != null) cameraHandler.closeCamera();
+        if(cameraHandler != null) {
+            cameraHandler.closeCamera();
+            cameraHandler = null;
+        }
 
     }
 
@@ -52,7 +68,10 @@ public class CameraActivity extends AppCompatActivity {
     protected void onStop() {
         super.onStop();
 
-        if(cameraHandler != null) cameraHandler.closeCamera();
+        if(cameraHandler != null) {
+            cameraHandler.closeCamera();
+            cameraHandler = null;
+        }
     }
 
     public void onRequestPermissionsResult(int requestCode, String permissions[], int[] grantResults) {
